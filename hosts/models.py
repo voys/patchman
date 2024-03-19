@@ -125,7 +125,7 @@ class Host(models.Model):
 
     def get_host_repo_packages(self):
         if self.host_repos_only:
-            hostrepos_q = Q(mirror__repo__in=self.repos.all(),
+            hostrepos_q = Q(mirror__repo__in=list(self.repos.all()),
                             mirror__enabled=True,
                             mirror__repo__enabled=True,
                             mirror__repo__hostrepo__enabled=True)
@@ -135,7 +135,7 @@ class Host(models.Model):
                   mirror__repo__arch=self.arch,
                   mirror__enabled=True,
                   mirror__repo__enabled=True) | \
-                Q(mirror__repo__in=self.repos.all(),
+                Q(mirror__repo__in=list(self.repos.all()),
                   mirror__enabled=True,
                   mirror__repo__enabled=True)
         return Package.objects.select_related().filter(hostrepos_q).distinct()
@@ -191,7 +191,7 @@ class Host(models.Model):
             Q(name__name='kernel-uek-container') | \
             Q(name__name='kernel-uek-container-debug') | \
             Q(name__name='kernel-uek-doc')
-        repo_packages = self.get_host_repo_packages()
+        repo_packages = list(self.get_host_repo_packages().order_by())
         host_packages = self.packages.exclude(kernels_q).distinct()
         kernel_packages = self.packages.filter(kernels_q)
 
@@ -218,7 +218,11 @@ class Host(models.Model):
                         repo__mirror__refresh=True,
                         repo__mirror__repo__enabled=True,
                         host=self)
-        hostrepos = HostRepo.objects.select_related().filter(hostrepos_q)
+        hostrepos = list(HostRepo.objects
+                         .select_related()
+                         .prefetch_related('repo__mirror_set__packages')
+                         .filter(hostrepos_q))
+        repo_packages = list(repo_packages)
 
         for package in host_packages:
             highest_package = package
@@ -228,10 +232,13 @@ class Host(models.Model):
                 priority = best_repo.priority
 
             # find the packages that are potential updates
-            pu_q = Q(name=package.name,
-                     arch=package.arch,
-                     packagetype=package.packagetype)
-            potential_updates = repo_packages.filter(pu_q)
+            potential_updates = [
+                repo_package
+                for repo_package in repo_packages
+                if repo_package.name_id == package.name_id
+                and repo_package.arch_id == package.arch_id
+                and repo_package.packagetype == package.packagetype
+            ]
             for pu in potential_updates:
                 pu_is_module_package = False
                 pu_in_enabled_modules = False
@@ -267,14 +274,19 @@ class Host(models.Model):
     def find_osgroup_repo_updates(self, host_packages, repo_packages):
 
         update_ids = []
+        repo_packages = list(repo_packages)
 
         for package in host_packages:
             highest_package = package
 
             # find the packages that are potential updates
-            pu_q = Q(name=package.name, arch=package.arch,
-                     packagetype=package.packagetype)
-            potential_updates = repo_packages.filter(pu_q)
+            potential_updates = [
+                repo_package
+                for repo_package in repo_packages
+                if repo_package.name_id == package.name_id
+                and repo_package.arch_id == package.arch_id
+                and repo_package.packagetype == package.packagetype
+            ]
             for pu in potential_updates:
                 pu_is_module_package = False
                 pu_in_enabled_modules = False
@@ -310,22 +322,24 @@ class Host(models.Model):
     def find_kernel_updates(self, kernel_packages, repo_packages):
 
         update_ids = []
+        repo_packages = list(repo_packages)
+        host_packages = list(self.packages.all())
+        _initial_reboot_required = self.reboot_required
 
         for package in kernel_packages:
             host_highest = package
             repo_highest = package
 
-            pu_q = Q(name=package.name)
-            potential_updates = repo_packages.filter(pu_q)
-            for pu in potential_updates:
-                if package.compare_version(pu) == -1 \
+            for pu in repo_packages:
+                if pu.name_id == package.name_id \
+                        and package.compare_version(pu) == -1 \
                         and repo_highest.compare_version(pu) == -1:
                     repo_highest = pu
 
-            host_packages = self.packages.filter(pu_q)
             for hp in host_packages:
-                if package.compare_version(hp) == -1 and \
-                        host_highest.compare_version(hp) == -1:
+                if hp.name_id == package.name_id \
+                        and package.compare_version(hp) == -1 \
+                        and host_highest.compare_version(hp) == -1:
                     host_highest = hp
 
             if host_highest.compare_version(repo_highest) == -1:
@@ -335,11 +349,12 @@ class Host(models.Model):
 
             self.check_if_reboot_required(host_highest)
 
-        try:
-            with transaction.atomic():
-                self.save()
-        except DatabaseError as e:
-            error_message.send(sender=None, text=e)
+        if _initial_reboot_required != self.reboot_required:
+            try:
+                with transaction.atomic():
+                    self.save()
+            except DatabaseError as e:
+                error_message.send(sender=None, text=e)
 
         return update_ids
 
