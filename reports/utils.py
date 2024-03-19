@@ -115,16 +115,31 @@ def process_packages(report, host):
         new_packages = []
         updated_packages = []
         new_packagenames = []
-
+        report_package_names = []
 
         package_arches = PackageArchitecture.objects.all()
         known_arches = {arch.name: arch for arch in package_arches}
 
         packagenames = PackageName.objects.all()
-        known_packagenames = {p_name.name: p_name for p_name in packagenames}
+        known_packagenames = {}
+
+        packagename_names = set(packagenames.values_list('name', flat=True))
+
+        packages = parse_packages(report.packages)
+        for i, pkg_str in enumerate(packages):
+            if report.protocol == '1':
+                name = pkg_str[0].lower()
+                if name != 'gpg-pubkey':
+                    report_package_names.append(name)
+                    if name not in packagename_names:
+                        new_packagenames.append(PackageName(name=name))
+        if new_packagenames:
+            packagenames.bulk_create(new_packagenames)
+        for p_name in packagenames.filter(name__in=report_package_names):
+            known_packagenames[p_name.name] = p_name
 
         potential_packages = {}
-        for p in Package.objects.all():
+        for p in Package.objects.filter(name__name__in=report_package_names):
             lookup_key = (p.name_id, p.arch_id, p.version, p.release, p.packagetype)
             if lookup_key not in potential_packages:
                 potential_packages[lookup_key] = p
@@ -133,19 +148,6 @@ def process_packages(report, host):
                     potential_packages[lookup_key] = p
                 elif p.epoch and p.epoch > potential_packages[lookup_key].epoch:
                     potential_packages[lookup_key] = p
-
-        packages = parse_packages(report.packages)
-
-        for i, pkg_str in enumerate(packages):
-            if report.protocol == '1':
-                name = pkg_str[0].lower()
-                if name != 'gpg-pubkey':
-                    if name not in known_packagenames:
-                        new_packagenames.append(PackageName(name=name))
-        if new_packagenames:
-            new_packagenames = packagenames.bulk_create(new_packagenames)
-            for p_name in new_packagenames:
-                known_packagenames[p_name.name] = p_name
 
         progress_info_s.send(sender=None,
                              ptext=f'{str(host)[0:25]!s} packages',
@@ -167,7 +169,6 @@ def process_packages(report, host):
                         package.epoch = epoch
                         updated_packages.append(package)
                 except KeyError:
-                    print(f"lookup error for {p_name.name=}; {lookup_key=}")
                     package = Package(
                         name=p_name,
                         arch=p_arch,
