@@ -23,19 +23,22 @@ from hosts.models import HostRepo
 from arch.models import MachineArchitecture, PackageArchitecture
 from repos.models import Repository, Mirror, MirrorPackage
 from modules.models import Module
-from packages.models import Package
+from packages.models import Package, PackageName
 from packages.utils import find_evr, get_or_create_package, \
     get_or_create_package_update, parse_package_string
 from patchman.signals import progress_info_s, progress_update_s, \
     error_message, info_message
 
 
+@transaction.atomic(savepoint=False)
 def process_repos(report, host):
     """ Processes the quoted repos string sent with a report
     """
     if report.repos:
         repo_ids = []
-        host_repos = HostRepo.objects.filter(host=host)
+        updated_hostrepos = []
+
+        host_repos = HostRepo.objects.filter(host=host).select_related('repo')
         repos = parse_repos(report.repos)
 
         progress_info_s.send(sender=None,
@@ -46,7 +49,11 @@ def process_repos(report, host):
             if repo:
                 repo_ids.append(repo.id)
                 try:
-                    with transaction.atomic():
+                    for hr in host_repos:
+                        if hr.repo == repo:
+                            hostrepo = hr
+                            break
+                    else:
                         hostrepo, c = host_repos.get_or_create(host=host,
                                                                repo=repo)
                 except IntegrityError as e:
@@ -55,15 +62,18 @@ def process_repos(report, host):
                 try:
                     if hostrepo.priority != priority:
                         hostrepo.priority = priority
-                        with transaction.atomic():
-                            hostrepo.save()
+                        updated_hostrepos.append(hostrepo)
                 except IntegrityError as e:
                     error_message.send(sender=None, text=e)
             progress_update_s.send(sender=None, index=i + 1)
 
+        HostRepo.objects.bulk_update(updated_hostrepos, ['priority'])
+
+        deleted_hostrepo_ids = []
         for hostrepo in host_repos:
             if hostrepo.repo_id not in repo_ids:
-                hostrepo.delete()
+                deleted_hostrepo_ids.append(hostrepo.repo_id)
+        HostRepo.objects.filter(host=host, repo_id__in=deleted_hostrepo_ids).delete()
 
 
 def process_modules(report, host):
@@ -80,50 +90,108 @@ def process_modules(report, host):
             module = process_module(module_str)
             if module:
                 module_ids.append(module.id)
-                try:
-                    with transaction.atomic():
-                        host.modules.add(module)
-                except IntegrityError as e:
-                    error_message.send(sender=None, text=e)
-                except DatabaseError as e:
-                    error_message.send(sender=None, text=e)
+                # try:
+                #     with transaction.atomic():
+                #         host.modules.add(module)
+                # except IntegrityError as e:
+                #     error_message.send(sender=None, text=e)
+                # except DatabaseError as e:
+                #     error_message.send(sender=None, text=e)
             progress_update_s.send(sender=None, index=i + 1)
 
-        for module in host.modules.all():
-            if module.id not in module_ids:
-                host.modules.remove(module)
+        # for module in host.modules.all():
+        #     if module.id not in module_ids:
+        #         host.modules.remove(module)
+        host.modules.set(*module_ids)
 
 
+@transaction.atomic(savepoint=False)
 def process_packages(report, host):
     """ Processes the quoted packages string sent with a report
     """
     if report.packages:
         package_ids = []
 
+        new_packages = []
+        updated_packages = []
+        new_packagenames = []
+
+
+        package_arches = PackageArchitecture.objects.all()
+        known_arches = {arch.name: arch for arch in package_arches}
+
+        packagenames = PackageName.objects.all()
+        known_packagenames = {p_name.name: p_name for p_name in packagenames}
+
+        potential_packages = {}
+        for p in Package.objects.all():
+            lookup_key = (p.name_id, p.arch_id, p.version, p.release, p.packagetype)
+            if lookup_key not in potential_packages:
+                potential_packages[lookup_key] = p
+            else:
+                if not potential_packages[lookup_key].epoch:
+                    potential_packages[lookup_key] = p
+                elif p.epoch and p.epoch > potential_packages[lookup_key].epoch:
+                    potential_packages[lookup_key] = p
+
         packages = parse_packages(report.packages)
+
+        for i, pkg_str in enumerate(packages):
+            if report.protocol == '1':
+                name = pkg_str[0].lower()
+                if name != 'gpg-pubkey':
+                    if name not in known_packagenames:
+                        new_packagenames.append(PackageName(name=name))
+        if new_packagenames:
+            new_packagenames = packagenames.bulk_create(new_packagenames)
+            for p_name in new_packagenames:
+                known_packagenames[p_name.name] = p_name
+
         progress_info_s.send(sender=None,
                              ptext=f'{str(host)[0:25]!s} packages',
                              plen=len(packages))
         for i, pkg_str in enumerate(packages):
-            package = process_package(pkg_str, report.protocol)
-            if package:
-                package_ids.append(package.id)
-                try:
-                    with transaction.atomic():
-                        host.packages.add(package)
-                except IntegrityError as e:
-                    error_message.send(sender=None, text=e)
-                except DatabaseError as e:
-                    error_message.send(sender=None, text=e)
+            try:
+                name, epoch, version, release, arch, packagetype = process_package(pkg_str, report.protocol)
+            except ValueError:
+                package = None
             else:
+                p_name = known_packagenames[name]
+                p_arch = known_arches[arch]
+                lookup_key = (p_name.id, p_arch.id, version, release, packagetype)
+
+                try:
+                    package = potential_packages[lookup_key]
+                    package_ids.append(package.id)
+                    if epoch and package.epoch != epoch:
+                        package.epoch = epoch
+                        updated_packages.append(package)
+                except KeyError:
+                    print(f"lookup error for {p_name.name=}; {lookup_key=}")
+                    package = Package(
+                        name=p_name,
+                        arch=p_arch,
+                        epoch=epoch,
+                        version=version,
+                        release=release,
+                        packagetype=packagetype,
+                    )
+                    new_packages.append(package)
+
+            if not package:
                 if pkg_str[0].lower() != 'gpg-pubkey':
                     text = f'No package returned for {pkg_str!s}'
                     info_message.send(sender=None, text=text)
             progress_update_s.send(sender=None, index=i + 1)
 
-        for package in host.packages.all():
-            if package.id not in package_ids:
-                host.packages.remove(package)
+        if updated_packages or new_packages:
+            if updated_packages:
+                Package.objects.bulk_update(updated_packages, ['epoch'])
+            if new_packages:
+                new_packages = Package.objects.bulk_create(new_packages)
+                package_ids.extend([p.id for p in new_packages])
+
+        host.packages.set(package_ids)
 
 
 def process_updates(report, host):
@@ -153,8 +221,8 @@ def merge_updates(sec_updates, bug_updates):
 def add_updates(updates, host):
     """ Add updates to a Host
     """
-    for host_update in host.updates.all():
-        host.updates.remove(host_update)
+    host.updates.clear()
+    update_ids = []
     ulen = len(updates)
     if ulen > 0:
         ptext = f'{str(host)[0:25]!s} updates'
@@ -163,8 +231,9 @@ def add_updates(updates, host):
         for i, (u, sec) in enumerate(updates.items()):
             update = process_update(host, u, sec)
             if update:
-                host.updates.add(update)
+                update_ids.append(update.id)
             progress_update_s.send(sender=None, index=i + 1)
+        host.updates.add(*update_ids)
 
 
 def parse_updates(updates_string, security):
@@ -230,6 +299,7 @@ def parse_repos(repos_string):
     return repos
 
 
+@transaction.atomic(savepoint=False)
 def process_repo(repo, arch):
     """ Processes a single sanitized repo string and converts to a repo object
     """
@@ -251,13 +321,12 @@ def process_repo(repo, arch):
         r_name = repo[1]
 
     machine_arches = MachineArchitecture.objects.all()
-    with transaction.atomic():
-        r_arch, c = machine_arches.get_or_create(name=arch)
+    r_arch, c = machine_arches.get_or_create(name=arch)
 
     unknown = []
     for r_url in repo[3:]:
         try:
-            mirror = Mirror.objects.get(url=r_url)
+            mirror = Mirror.objects.select_related('repo').get(url=r_url)
         except Mirror.DoesNotExist:
             if repository:
                 Mirror.objects.create(repo=repository, url=r_url)
@@ -280,10 +349,10 @@ def process_repo(repo, arch):
         except DatabaseError as e:
             error_message.send(sender=None, text=e)
 
+    _repo_changed = False
     if r_id and repository.repo_id != r_id:
         repository.repo_id = r_id
-        with transaction.atomic():
-            repository.save()
+        _repo_changed = True
 
     for url in unknown:
         Mirror.objects.create(repo=repository, url=url)
@@ -293,12 +362,13 @@ def process_repo(repo, arch):
                 mirror['url'].find('nu.novell.com') != -1 or \
                 mirror['url'].find('updates.suse.com') != -1:
             repository.auth_required = True
-            with transaction.atomic():
-                repository.save()
+            _repo_changed = True
         if mirror['url'].find('security') != -1:
             repository.security = True
-            with transaction.atomic():
-                repository.save()
+            _repo_changed = True
+
+    if _repo_changed:
+        repository.save()
 
     return repository, r_priority
 
@@ -381,8 +451,8 @@ def parse_packages(packages_string):
 
 
 def process_package(pkg, protocol):
-    """ Processes a single sanitized package string and converts to a package
-        object
+    """ Processes a single sanitized package string and converts to package
+        args
     """
     if protocol == '1':
         epoch = ver = rel = ''
@@ -407,5 +477,4 @@ def process_package(pkg, protocol):
         else:
             p_type = Package.UNKNOWN
 
-        package = get_or_create_package(name, epoch, ver, rel, arch, p_type)
-        return package
+        return name, epoch, ver, rel, arch, p_type

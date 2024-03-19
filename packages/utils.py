@@ -252,6 +252,7 @@ def add_erratum_refs(e, references):
         e.references.add(er)
 
 
+@transaction.atomic(savepoint=False)
 def get_or_create_package(name, epoch, version, release, arch, p_type):
     """ Get or create a Package object. Returns the object. Returns None if the
         package is the pseudo package gpg-pubkey, or if it cannot create it
@@ -265,9 +266,8 @@ def get_or_create_package(name, epoch, version, release, arch, p_type):
         epoch = ''
 
     try:
-        with transaction.atomic():
-            package_names = PackageName.objects.all()
-            p_name, c = package_names.get_or_create(name=name)
+        package_names = PackageName.objects.all()
+        p_name, c = package_names.get_or_create(name=name)
     except IntegrityError as e:
         error_message.send(sender=None, text=e)
         p_name = package_names.get(name=name)
@@ -275,8 +275,7 @@ def get_or_create_package(name, epoch, version, release, arch, p_type):
         error_message.send(sender=None, text=e)
 
     package_arches = PackageArchitecture.objects.all()
-    with transaction.atomic():
-        p_arch, c = package_arches.get_or_create(name=arch)
+    p_arch, c = package_arches.get_or_create(name=arch)
 
     packages = Package.objects.all()
     potential_packages = packages.filter(
@@ -285,22 +284,20 @@ def get_or_create_package(name, epoch, version, release, arch, p_type):
         version=version,
         release=release,
         packagetype=p_type,
-    ).order_by('-epoch')
-    if potential_packages.exists():
+    ).order_by('-epoch')[:1]
+    if potential_packages:
         package = potential_packages[0]
         if epoch and package.epoch != epoch:
             package.epoch = epoch
-            with transaction.atomic():
-                package.save()
+            package.save()
     else:
         try:
-            with transaction.atomic():
-                package = packages.create(name=p_name,
-                                          arch=p_arch,
-                                          epoch=epoch,
-                                          version=version,
-                                          release=release,
-                                          packagetype=p_type)
+            package = packages.create(name=p_name,
+                                      arch=p_arch,
+                                      epoch=epoch,
+                                      version=version,
+                                      release=release,
+                                      packagetype=p_type)
         except DatabaseError as e:
             error_message.send(sender=None, text=e)
     return package
