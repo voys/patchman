@@ -277,8 +277,8 @@ def repo_detail(request, repo_id):
     hosts = Host.objects.with_counts('get_num_security_updates', 'get_num_bugfix_updates')
     hosts_prefetch = Prefetch('host_set', queryset=hosts)
     repo = Repository.objects.select_related() \
-           .prefetch_related(hosts_prefetch) \
-           .get(id=repo_id)
+        .prefetch_related(hosts_prefetch) \
+        .get(id=repo_id)
 
     return render(request,
                   'repos/repo_detail.html',

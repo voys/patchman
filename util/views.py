@@ -42,7 +42,7 @@ def dashboard(request):
 
     hosts = Host.objects.with_counts('get_num_security_updates',
                                      'get_num_bugfix_updates') \
-            .select_related()
+        .select_related()
     osvariants = OSVariant.objects.all().prefetch_related('host_set')
     osreleases = OSRelease.objects.all()
     repos = Repository.objects.all().prefetch_related('mirror_set')
@@ -92,10 +92,10 @@ def dashboard(request):
     norepo_packages = packages.filter(Exists(nohost_packages),
                                       ~Exists(nomirror_packages),
                                       ~Exists(nooldpackage_packages)) \
-                      .distinct()
+        .distinct()
     orphaned_packages = packages.filter(~Exists(nohost_packages),
                                         ~Exists(nomirror_packages)) \
-                        .distinct()
+        .distinct()
 
     # report issues
     unprocessed_reports = Report.objects.filter(processed=False)
@@ -104,8 +104,8 @@ def dashboard(request):
     possible_mirrors = {}
 
     mirrors = Mirror.objects.all() \
-              .annotate(packages_count=Coalesce(Count('packages', distinct=True), 0)) \
-              .select_related()
+        .annotate(packages_count=Coalesce(Count('packages', distinct=True), 0)) \
+        .select_related()
     for mirror in mirrors:
         if mirror.packages_checksum != 'yast' and mirror.packages_count > 0:
             if mirror.packages_checksum not in checksums:
