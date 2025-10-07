@@ -17,7 +17,6 @@
 
 from datetime import datetime, timedelta
 
-from django.conf import settings
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
 
@@ -26,10 +25,11 @@ from django.db.models import Count, Exists, F, OuterRef
 from django.db.models.functions import Coalesce
 
 from hosts.models import Host
-from operatingsystems.models import OS, OSGroup
+from operatingsystems.models import OSVariant, OSRelease
 from repos.models import Repository, Mirror
 from packages.models import Package, PackageUpdate
 from reports.models import Report
+from util import get_setting_of_type
 
 
 @login_required
@@ -42,34 +42,34 @@ def dashboard(request):
 
     hosts = Host.objects.with_counts('get_num_security_updates',
                                      'get_num_bugfix_updates') \
-            .select_related()
-    oses = OS.objects.all().prefetch_related('host_set')
-    osgroups = OSGroup.objects.all()
+        .select_related()
+    osvariants = OSVariant.objects.all().prefetch_related('host_set')
+    osreleases = OSRelease.objects.all()
     repos = Repository.objects.all().prefetch_related('mirror_set')
     packages = Package.objects.all()
 
     # host issues
-    if hasattr(settings, 'DAYS_WITHOUT_REPORT') and \
-            isinstance(settings.DAYS_WITHOUT_REPORT, int):
-        days = settings.DAYS_WITHOUT_REPORT
-    else:
-        days = 14
+    days = get_setting_of_type(
+        setting_name='DAYS_WITHOUT_REPORT',
+        setting_type=int,
+        default=14,
+    )
     last_report_delta = datetime.now() - timedelta(days=days)
     stale_hosts = hosts.filter(lastreport__lt=last_report_delta)
-    norepo_hosts = hosts.filter(repos__isnull=True, os__osgroup__repos__isnull=True)  # noqa
+    norepo_hosts = hosts.filter(repos__isnull=True, osvariant__osrelease__repos__isnull=True)  # noqa
     reboot_hosts = hosts.filter(reboot_required=True)
     secupdate_hosts = hosts.filter(updates__security=True, updates__isnull=False).distinct()  # noqa
     bugupdate_hosts = hosts.exclude(updates__security=True, updates__isnull=False).distinct().filter(updates__security=False, updates__isnull=False).distinct()  # noqa
     diff_rdns_hosts = hosts.exclude(reversedns=F('hostname')).filter(check_dns=True)  # noqa
 
-    # os issues
-    lonely_oses = oses.filter(osgroup__isnull=True)
-    nohost_oses = oses.filter(host__isnull=True)
+    # os variant issues
+    noosrelease_osvariants = osvariants.filter(osrelease__isnull=True)
+    nohost_osvariants = osvariants.filter(host__isnull=True)
 
-    # osgroup issues
-    norepo_osgroups = None
+    # os release issues
+    norepo_osreleases = None
     if hosts.filter(host_repos_only=False).exists():
-        norepo_osgroups = osgroups.filter(repos__isnull=True)
+        norepo_osreleases = osreleases.filter(repos__isnull=True)
 
     # mirror issues
     failed_mirrors = repos.filter(auth_required=False).filter(mirror__last_access_ok=False).filter(mirror__last_access_ok=True).distinct()  # noqa
@@ -78,7 +78,7 @@ def dashboard(request):
 
     # repo issues
     failed_repos = repos.filter(auth_required=False).filter(mirror__last_access_ok=False).exclude(id__in=[x.id for x in failed_mirrors]).distinct()  # noqa
-    unused_repos = repos.filter(host__isnull=True, osgroup__isnull=True)
+    unused_repos = repos.filter(host__isnull=True, osrelease__isnull=True)
     nomirror_repos = repos.filter(mirror__isnull=True)
     nohost_repos = repos.filter(host__isnull=True)
 
@@ -92,10 +92,10 @@ def dashboard(request):
     norepo_packages = packages.filter(Exists(nohost_packages),
                                       ~Exists(nomirror_packages),
                                       ~Exists(nooldpackage_packages)) \
-                      .distinct()
+        .distinct()
     orphaned_packages = packages.filter(~Exists(nohost_packages),
                                         ~Exists(nomirror_packages)) \
-                        .distinct()
+        .distinct()
 
     # report issues
     unprocessed_reports = Report.objects.filter(processed=False)
@@ -104,13 +104,13 @@ def dashboard(request):
     possible_mirrors = {}
 
     mirrors = Mirror.objects.all() \
-              .annotate(packages_count=Coalesce(Count('packages', distinct=True), 0)) \
-              .select_related()
+        .annotate(packages_count=Coalesce(Count('packages', distinct=True), 0)) \
+        .select_related()
     for mirror in mirrors:
-        if mirror.file_checksum != 'yast' and mirror.packages_count > 0:
-            if mirror.file_checksum not in checksums:
-                checksums[mirror.file_checksum] = []
-            checksums[mirror.file_checksum].append(mirror)
+        if mirror.packages_checksum != 'yast' and mirror.packages_count > 0:
+            if mirror.packages_checksum not in checksums:
+                checksums[mirror.packages_checksum] = []
+            checksums[mirror.packages_checksum].append(mirror)
 
     for checksum in checksums:
         first_mirror = checksums[checksum][0]
@@ -125,18 +125,23 @@ def dashboard(request):
         request,
         'dashboard.html',
         {'site': site,
-         'lonely_oses': lonely_oses, 'norepo_hosts': norepo_hosts,
-         'nohost_oses': nohost_oses, 'diff_rdns_hosts': diff_rdns_hosts,
-         'stale_hosts': stale_hosts, 'possible_mirrors': possible_mirrors,
+         'noosrelease_osvariants': noosrelease_osvariants,
+         'norepo_hosts': norepo_hosts,
+         'nohost_osvariants': nohost_osvariants,
+         'diff_rdns_hosts': diff_rdns_hosts,
+         'stale_hosts': stale_hosts,
+         'possible_mirrors': possible_mirrors,
          'norepo_packages': norepo_packages,
          'nohost_repos': nohost_repos,
          'secupdate_hosts': secupdate_hosts,
          'bugupdate_hosts': bugupdate_hosts,
-         'norepo_osgroups': norepo_osgroups, 'unused_repos': unused_repos,
+         'norepo_osreleases': norepo_osreleases,
+         'unused_repos': unused_repos,
          'disabled_mirrors': disabled_mirrors,
          'norefresh_mirrors': norefresh_mirrors,
          'failed_mirrors': failed_mirrors,
          'orphaned_packages': orphaned_packages,
-         'failed_repos': failed_repos, 'nomirror_repos': nomirror_repos,
+         'failed_repos': failed_repos,
+         'nomirror_repos': nomirror_repos,
          'reboot_hosts': reboot_hosts,
-         'unprocessed_reports': unprocessed_reports}, )
+         'unprocessed_reports': unprocessed_reports})
