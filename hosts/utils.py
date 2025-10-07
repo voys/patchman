@@ -37,6 +37,7 @@ def update_rdns(host):
 def get_or_create_host(report, arch, osvariant, domain):
     """ Get or create a host from from a report
     """
+    host = None
     from hosts.models import Host
     if not report.host:
         try:
