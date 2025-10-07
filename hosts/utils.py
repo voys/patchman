@@ -63,12 +63,15 @@ def get_or_create_host(report, arch, osvariant, domain):
             host.osvariant = osvariant
             host.domain = domain
             host.lastreport = report.created
-            host.tags = report.tags
             if report.reboot == 'True':
                 host.reboot_required = True
             else:
                 host.reboot_required = False
             host.save()
+            if report.tags:
+                host.tags.set(*report.tags.split(','))
+            else:
+                host.tags.clear()
     except IntegrityError as e:
         error_message.send(sender=None, text=e)
     if host:
