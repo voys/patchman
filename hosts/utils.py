@@ -55,6 +55,7 @@ def get_or_create_host(report, arch, osvariant, domain):
                     'osvariant': osvariant,
                     'domain': domain,
                     'lastreport': report.created,
+                    'tags': report.tags,
                 }
             )
             host.ipaddress = report.report_ip
