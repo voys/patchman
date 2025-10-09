@@ -55,7 +55,6 @@ def get_or_create_host(report, arch, osvariant, domain):
                     'osvariant': osvariant,
                     'domain': domain,
                     'lastreport': report.created,
-                    'tags': report.tags,
                 }
             )
             host.ipaddress = report.report_ip
@@ -64,12 +63,17 @@ def get_or_create_host(report, arch, osvariant, domain):
             host.osvariant = osvariant
             host.domain = domain
             host.lastreport = report.created
-            host.tags = report.tags
             if report.reboot == 'True':
                 host.reboot_required = True
             else:
                 host.reboot_required = False
             host.save()
+            # Handle tags after save (TaggableManager requires instance to exist)
+            if report.tags:
+                if isinstance(report.tags, str):
+                    host.tags.set(*report.tags.split(','))
+                else:
+                    host.tags.set(report.tags)
     except IntegrityError as e:
         error_message.send(sender=None, text=e)
     if host:
