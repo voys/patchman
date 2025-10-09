@@ -1,6 +1,13 @@
 patchman (3.0.19--1) stable; urgency=medium
 
   [ Jasper Hafkenscheid ]
+  * fix: Work around host.tags null contstraint
+
+ -- Marcus Furlong <furlongm@gmail.com>  Thu, 09 Oct 2025 07:37:24 +0000
+
+patchman (3.0.19--1) stable; urgency=medium
+
+  [ Jasper Hafkenscheid ]
   * fix: Attempt to handle hosts with tags
 
   [ Marcus Furlong ]
