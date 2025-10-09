@@ -1,6 +1,13 @@
 patchman (3.0.19--1) stable; urgency=medium
 
   [ Jasper Hafkenscheid ]
+  * fix: Rework host tags, again 2
+
+ -- Marcus Furlong <furlongm@gmail.com>  Thu, 09 Oct 2025 08:40:50 +0000
+
+patchman (3.0.19--1) stable; urgency=medium
+
+  [ Jasper Hafkenscheid ]
   * fix: Rework host tags, again
 
  -- Marcus Furlong <furlongm@gmail.com>  Thu, 09 Oct 2025 08:33:21 +0000
