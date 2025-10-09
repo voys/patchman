@@ -70,10 +70,8 @@ def get_or_create_host(report, arch, osvariant, domain):
             host.save()
             # Handle tags after save (TaggableManager requires instance to exist)
             if report.tags:
-                if isinstance(report.tags, str):
-                    host.tags.set(*report.tags.split(','))
-                else:
-                    host.tags.set(report.tags)
+                tag_list = [tag.strip() for tag in report.tags.split(',') if tag.strip()]
+                host.tags.set(tag_list)
     except IntegrityError as e:
         error_message.send(sender=None, text=e)
     if host:
