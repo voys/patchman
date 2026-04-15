@@ -110,6 +110,9 @@ class Host(models.Model):
     def get_num_repos(self):
         return self.repos.count()
 
+    def get_num_errata(self):
+        return self.errata.count()
+
     def check_rdns(self):
         if self.check_dns:
             update_rdns(self)

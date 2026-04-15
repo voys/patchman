@@ -21,8 +21,7 @@ from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
 
 from django.contrib.sites.models import Site
-from django.db.models import Count, Exists, F, OuterRef
-from django.db.models.functions import Coalesce
+from django.db.models import Exists, F, OuterRef
 
 from hosts.models import Host
 from operatingsystems.models import OSVariant, OSRelease
@@ -41,8 +40,9 @@ def dashboard(request):
         site = {'name': '', 'domainname': ''}
 
     hosts = Host.objects.with_counts('get_num_security_updates',
-                                     'get_num_bugfix_updates') \
-        .select_related()
+                                     'get_num_bugfix_updates',
+                                     'get_num_errata') \
+        .select_related('osvariant__arch')
     osvariants = OSVariant.objects.all().prefetch_related('host_set')
     osreleases = OSRelease.objects.all()
     repos = Repository.objects.all().prefetch_related('mirror_set')
@@ -104,10 +104,10 @@ def dashboard(request):
     possible_mirrors = {}
 
     mirrors = Mirror.objects.all() \
-        .annotate(packages_count=Coalesce(Count('packages', distinct=True), 0)) \
+        .filter(id__in=Package.objects.order_by().distinct().values_list('mirror', flat=True)) \
         .select_related()
     for mirror in mirrors:
-        if mirror.packages_checksum != 'yast' and mirror.packages_count > 0:
+        if mirror.packages_checksum != 'yast':
             if mirror.packages_checksum not in checksums:
                 checksums[mirror.packages_checksum] = []
             checksums[mirror.packages_checksum].append(mirror)

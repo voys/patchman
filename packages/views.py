@@ -117,7 +117,7 @@ def package_list(request):
 
 @login_required
 def package_name_list(request):
-    packages = PackageName.objects.select_related()
+    packages = PackageName.objects.select_related().prefetch_related('package_set')
 
     if 'arch_id' in request.GET:
         packages = packages.filter(package__arch=request.GET['arch_id']).distinct()
