@@ -70,7 +70,10 @@ def cwe_detail(request, cwe_id):
 
 @login_required
 def cve_list(request):
-    cves = CVE.objects.select_related()
+    cves = CVE.objects.select_related() \
+        .prefetch_related('cvss_scores',
+                          'cwes',
+                          'erratum_set')
 
     if 'erratum_id' in request.GET:
         cves = cves.filter(erratum=request.GET['erratum_id'])

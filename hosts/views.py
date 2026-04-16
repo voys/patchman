@@ -38,8 +38,9 @@ from hosts.serializers import HostSerializer, HostRepoSerializer
 @login_required
 def host_list(request):
     hosts = Host.objects.with_counts('get_num_security_updates',
-                                     'get_num_bugfix_updates') \
-            .select_related()
+                                     'get_num_bugfix_updates',
+                                     'get_num_errata') \
+            .select_related('osvariant__arch')
 
     if 'domain_id' in request.GET:
         hosts = hosts.filter(domain=request.GET['domain_id'])
@@ -97,7 +98,8 @@ def host_list(request):
     filter_list.append(Filter(request, 'Domain', 'domain_id', Domain.objects.all()))
     filter_list.append(Filter(request, 'OS Release', 'osrelease_id',
                               OSRelease.objects.filter(osvariant__host__in=hosts)))
-    filter_list.append(Filter(request, 'OS Variant', 'osvariant_id', OSVariant.objects.filter(host__in=hosts)))
+    filter_list.append(Filter(request, 'OS Variant', 'osvariant_id',
+                              OSVariant.objects.filter(host__in=hosts).select_related('arch')))
     filter_list.append(Filter(request, 'Architecture', 'arch_id', MachineArchitecture.objects.filter(host__in=hosts)))
     filter_list.append(Filter(request, 'Reboot Required', 'reboot_required', {'true': 'Yes', 'false': 'No'}))
     filter_bar = FilterBar(request, filter_list)

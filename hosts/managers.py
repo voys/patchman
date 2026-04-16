@@ -47,6 +47,13 @@ class HostManager(models.Manager):
                 ),
                 0,
             ),
+            'get_num_errata': Coalesce(
+                Count(
+                    'errata',
+                    distinct=True,
+                ),
+                0,
+            ),
         }
 
         return self.get_queryset() \
