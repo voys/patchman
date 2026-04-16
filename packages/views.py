@@ -16,12 +16,14 @@
 # along with Patchman. If not, see <http://www.gnu.org/licenses/>
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Q
+from django.db.models import Count, Prefetch, Q
 from django.shortcuts import get_object_or_404, render
 from django_tables2 import RequestConfig
 from rest_framework import viewsets
 
 from arch.models import PackageArchitecture
+from errata.models import Erratum
+from hosts.models import Host
 from packages.models import Package, PackageName, PackageUpdate
 from packages.serializers import (
     PackageNameSerializer, PackageSerializer, PackageUpdateSerializer,
@@ -32,7 +34,7 @@ from util.filterspecs import Filter, FilterBar
 
 @login_required
 def package_list(request):
-    packages = Package.objects.select_related('name', 'arch')
+    packages = Package.objects.all()
 
     if 'arch_id' in request.GET:
         packages = packages.filter(arch=request.GET['arch_id']).distinct()
@@ -121,7 +123,7 @@ def package_list(request):
 
 @login_required
 def package_name_list(request):
-    packages = PackageName.objects.all()
+    packages = PackageName.objects.all().prefetch_related('package_set')
 
     if 'arch_id' in request.GET:
         packages = packages.filter(package__arch=request.GET['arch_id']).distinct()
@@ -165,7 +167,17 @@ def package_detail(request, package_id):
 @login_required
 def package_name_detail(request, packagename):
     package = get_object_or_404(PackageName, name=packagename)
-    allversions = Package.objects.select_related('name', 'arch').filter(name=package.id)
+
+    host_set = Prefetch('host_set',
+                        Host.objects.all().select_related(None).order_by())
+    affected_by_erratum = Prefetch('affected_by_erratum',
+                                   Erratum.objects.all().select_related(None).order_by())
+    provides_fix_in_erratum = Prefetch('provides_fix_in_erratum',
+                                       Erratum.objects.all().select_related(None).order_by())
+    allversions = Package.objects.filter(name=package.id).annotate(
+        repo_count=Count('mirror__repo', distinct=True),
+    ).prefetch_related(host_set, affected_by_erratum, provides_fix_in_erratum)
+
     return render(request,
                   'packages/package_name_detail.html',
                   {'package': package,
@@ -185,7 +197,7 @@ class PackageViewSet(viewsets.ModelViewSet):
     """
     API endpoint that allows packages to be viewed or edited.
     """
-    queryset = Package.objects.select_related('name', 'arch').all()
+    queryset = Package.objects.all()
     serializer_class = PackageSerializer
     filterset_fields = [
         'name',

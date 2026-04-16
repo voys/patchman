@@ -32,7 +32,7 @@ from util.filterspecs import Filter, FilterBar
 
 @login_required
 def cwe_list(request):
-    cwes = CWE.objects.all()
+    cwes = CWE.objects.all().prefetch_related('cve_set')
 
     if 'search' in request.GET:
         terms = request.GET['search'].lower()
@@ -65,7 +65,10 @@ def cwe_detail(request, cwe_id):
 
 @login_required
 def cve_list(request):
-    cves = CVE.objects.all()
+    cves = CVE.objects.all() \
+        .prefetch_related('cvss_scores',
+                          'cwes',
+                          'erratum_set')
 
     if 'erratum_id' in request.GET:
         cves = cves.filter(erratum=request.GET['erratum_id'])
@@ -117,10 +120,11 @@ def cve_detail(request, cve_id):
 
 @login_required
 def reference_list(request):
-    refs = Reference.objects.all().order_by('ref_type')
+    refs = Reference.objects.all().order_by('ref_type') \
+        .prefetch_related('erratum_set')
 
     if 'ref_type' in request.GET:
-        refs = refs.filter(ref_type=request.GET['ref_type']).distinct()
+        refs = refs.filter(ref_type=request.GET['ref_type'])
 
     if 'erratum_id' in request.GET:
         refs = refs.filter(erratum__id=request.GET['erratum_id'])
@@ -137,7 +141,7 @@ def reference_list(request):
 
     filter_list = []
     filter_list.append(Filter(request, 'Reference Type', 'ref_type',
-                              Reference.objects.values_list('ref_type', flat=True).distinct()))
+                              Reference.objects.order_by('ref_type').values_list('ref_type', flat=True).distinct()))
     filter_bar = FilterBar(request, filter_list)
 
     table = ReferenceTable(refs)

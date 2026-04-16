@@ -46,7 +46,7 @@ from util.filterspecs import Filter, FilterBar
 @login_required
 def repo_list(request):
 
-    repos = Repository.objects.select_related('arch').order_by('name')
+    repos = Repository.objects.all().prefetch_related('mirror_set')
 
     if 'repotype' in request.GET:
         repos = repos.filter(repotype=request.GET['repotype'])

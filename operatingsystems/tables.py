@@ -47,7 +47,7 @@ OSVARIANT_CODENAME_TEMPLATE = (
 )
 OSVARIANT_HOSTS_TEMPLATE = (
     '<a href="{% url \'hosts:host_list\' %}?osvariant_id={{ record.id }}">'
-    '{{ record.host_set.count }}</a>'
+    '{{ record.host_count }}</a>'
 )
 OSVARIANT_OSRELEASE_TEMPLATE = (
     '{% if record.osrelease %}'

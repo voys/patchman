@@ -88,6 +88,9 @@ def issues_count(request):
     if not request.user.is_authenticated:
         return {'issues_count': 0}
 
+    if hasattr(request, 'issues_count'):
+        return {'issues_count': request.issues_count}
+
     hosts = Host.objects.all()
     osvariants = OSVariant.objects.all()
     osreleases = OSRelease.objects.all()
@@ -159,5 +162,6 @@ def issues_count(request):
         (1 if nohost_repos.exists() else 0) +
         (1 if unprocessed_reports.exists() else 0)
     )
+    request.issues_count = count  # cache result while django-tables2 renders templates
 
     return {'issues_count': count}
