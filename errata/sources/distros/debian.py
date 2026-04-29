@@ -14,9 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Patchman. If not, see <http://www.gnu.org/licenses/>
 
+import bz2
 import concurrent.futures
 import csv
 import re
+import shutil
+import tempfile
 from datetime import datetime
 from debian.deb822 import Dsc
 from io import StringIO
@@ -28,7 +31,7 @@ from operatingsystems.utils import get_or_create_osrelease
 from packages.models import Package
 from packages.utils import get_or_create_package, find_evr
 from patchman.signals import error_message, pbar_start, pbar_update, warning_message
-from util import get_url, fetch_content, get_setting_of_type, extract
+from util import get_url, fetch_content, get_setting_of_type
 
 DSCs = {}
 
@@ -75,11 +78,32 @@ def fetch_dscs_from_debian_package_file_maps():
         file_map_url = f'https://deb.debian.org/{repo}/indices/package-file.map.bz2'
         res = get_url(file_map_url)
         data = fetch_content(res, f'Fetching `{repo}` package file map')
-        file_map_data = extract(data, file_map_url).decode()
-        parse_debian_package_file_map(file_map_data, repo)
+        try:
+            with (
+                tempfile.NamedTemporaryFile(mode="w+b", suffix=".bz2") as bz2_file,
+                tempfile.NamedTemporaryFile(mode="w+b", suffix=".map") as file_map,
+            ):
+                bz2_file.write(data)
+                bz2_file.seek(0)
+
+                # Streaming decompress to reduce memory footprint.
+                with bz2.BZ2File(bz2_file.name) as decompressor_f:
+                    shutil.copyfileobj(decompressor_f, file_map)
+
+                # Streaming parse file map to reduce memory footprint.
+                file_map.seek(0)
+                parse_debian_package_file_map(file_map, repo)
+        except IOError as e:
+            if e == 'invalid data stream':
+                error_message.send(sender=None, text='bunzip2: ' + e)
+        except ValueError as e:
+            if e == "couldn't find end of stream":
+                error_message.send(sender=None, text='bunzip2: ' + e)
+
+    print(f"{len(DSCs)=}")
 
 
-def parse_debian_package_file_map(data, repo):
+def parse_debian_package_file_map(file_map, repo):
     """ Parse the a Debian package file map
         Format:
             Path: ./pool/updates/main/3/389-ds-base/389-ds-base_1.4.0.21-1+deb10u1.dsc
@@ -87,7 +111,8 @@ def parse_debian_package_file_map(data, repo):
             Source-Version: 1.4.0.21-1+deb10u1
     """
     parsing_dsc = False
-    for line in data.splitlines():
+    for line in file_map:
+        line = line.removesuffix(b'\n').decode()
         if line.startswith('Path:'):
             if line.endswith('.dsc'):
                 parsing_dsc = True
